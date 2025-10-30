@@ -113,7 +113,10 @@ async def get_head_state() -> Dict[str, Any]:
     
     Returns the head's current position (x, y, z) and orientation (roll, pitch, yaw).
     """
-    return await make_request("GET", "/api/state/head")
+    full_state = await make_request("GET", "/api/state/full")
+    if "head_pose" in full_state:
+        return {"head_pose": full_state["head_pose"]}
+    return full_state
 
 
 @mcp.tool()
@@ -149,11 +152,11 @@ async def move_head(
     pose = create_head_pose(x, y, z, roll, pitch, yaw, degrees, mm)
     
     payload = {
-        "head": pose,
+        "head_pose": pose,
         "duration": duration
     }
     
-    return await make_request("POST", "/api/goto", json_data=payload)
+    return await make_request("POST", "/api/move/goto", json_data=payload)
 
 
 @mcp.tool()
@@ -165,10 +168,10 @@ async def reset_head() -> Dict[str, Any]:
     """
     pose = create_head_pose()
     payload = {
-        "head": pose,
+        "head_pose": pose,
         "duration": 2.0
     }
-    return await make_request("POST", "/api/goto", json_data=payload)
+    return await make_request("POST", "/api/move/goto", json_data=payload)
 
 
 @mcp.tool()
@@ -184,14 +187,14 @@ async def nod_head(duration: float = 1.0, angle: float = 15.0) -> Dict[str, Any]
     """
     # Nod down
     pose_down = create_head_pose(pitch=angle, degrees=True)
-    await make_request("POST", "/api/goto", json_data={"head": pose_down, "duration": duration})
+    await make_request("POST", "/api/move/goto", json_data={"head_pose": pose_down, "duration": duration})
     
     # Wait for movement to complete
     await asyncio.sleep(duration)
     
     # Return to neutral
     pose_neutral = create_head_pose()
-    return await make_request("POST", "/api/goto", json_data={"head": pose_neutral, "duration": duration})
+    return await make_request("POST", "/api/move/goto", json_data={"head_pose": pose_neutral, "duration": duration})
 
 
 @mcp.tool()
@@ -207,17 +210,17 @@ async def shake_head(duration: float = 1.0, angle: float = 20.0) -> Dict[str, An
     """
     # Shake left
     pose_left = create_head_pose(yaw=-angle, degrees=True)
-    await make_request("POST", "/api/goto", json_data={"head": pose_left, "duration": duration})
+    await make_request("POST", "/api/move/goto", json_data={"head_pose": pose_left, "duration": duration})
     await asyncio.sleep(duration)
     
     # Shake right
     pose_right = create_head_pose(yaw=angle, degrees=True)
-    await make_request("POST", "/api/goto", json_data={"head": pose_right, "duration": duration})
+    await make_request("POST", "/api/move/goto", json_data={"head_pose": pose_right, "duration": duration})
     await asyncio.sleep(duration)
     
     # Return to neutral
     pose_neutral = create_head_pose()
-    return await make_request("POST", "/api/goto", json_data={"head": pose_neutral, "duration": duration})
+    return await make_request("POST", "/api/move/goto", json_data={"head_pose": pose_neutral, "duration": duration})
 
 
 @mcp.tool()
@@ -236,10 +239,10 @@ async def tilt_head(direction: str = "left", angle: float = 15.0, duration: floa
     pose = create_head_pose(roll=roll_angle, degrees=True)
     
     payload = {
-        "head": pose,
+        "head_pose": pose,
         "duration": duration
     }
-    return await make_request("POST", "/api/goto", json_data=payload)
+    return await make_request("POST", "/api/move/goto", json_data=payload)
 
 
 @mcp.tool()
@@ -249,7 +252,10 @@ async def get_antennas_state() -> Dict[str, Any]:
     
     Returns the current position of left and right antennas.
     """
-    return await make_request("GET", "/api/state/antennas")
+    full_state = await make_request("GET", "/api/state/full")
+    if "antennas_position" in full_state:
+        return {"antennas_position": full_state["antennas_position"]}
+    return full_state
 
 
 @mcp.tool()
@@ -268,20 +274,21 @@ async def move_antennas(
     
     You can move one or both antennas. Leave None to keep current position.
     """
+    # Build antennas array [left, right] - need both values
+    antennas_array = []
+    if left is not None and right is not None:
+        # Convert degrees to radians
+        antennas_array = [math.radians(left), math.radians(right)]
+    else:
+        # If only one is specified, we can't proceed without knowing current state
+        return {"error": "Both left and right antenna positions must be specified", "status": "failed"}
+    
     payload = {
+        "antennas": antennas_array,
         "duration": duration
     }
     
-    antennas = {}
-    if left is not None:
-        antennas["left"] = left
-    if right is not None:
-        antennas["right"] = right
-    
-    if antennas:
-        payload["antennas"] = antennas
-    
-    return await make_request("POST", "/api/goto", json_data=payload)
+    return await make_request("POST", "/api/move/goto", json_data=payload)
 
 
 @mcp.tool()
@@ -290,13 +297,10 @@ async def reset_antennas() -> Dict[str, Any]:
     Reset both antennas to their neutral position (0 degrees).
     """
     payload = {
-        "antennas": {
-            "left": 0.0,
-            "right": 0.0
-        },
+        "antennas": [0.0, 0.0],
         "duration": 2.0
     }
-    return await make_request("POST", "/api/goto", json_data=payload)
+    return await make_request("POST", "/api/move/goto", json_data=payload)
 
 
 @mcp.tool()
@@ -307,7 +311,9 @@ async def get_camera_image() -> Dict[str, Any]:
     Returns the camera image data and metadata.
     Note: The actual image data will be in the response.
     """
-    return await make_request("GET", "/api/camera/image")
+    # Note: The daemon API doesn't provide camera access
+    # This would need to be implemented separately
+    return {"error": "Camera access not available through this API", "status": "not_implemented"}
 
 
 @mcp.tool()
@@ -317,7 +323,9 @@ async def get_camera_state() -> Dict[str, Any]:
     
     Returns information about camera status, resolution, and settings.
     """
-    return await make_request("GET", "/api/state/camera")
+    # Note: The actual daemon may not provide camera state info
+    # This is a placeholder that returns what's available
+    return {"status": "Camera state not available from this API endpoint"}
 
 
 @mcp.tool()
@@ -327,7 +335,7 @@ async def turn_on_robot() -> Dict[str, Any]:
     
     This powers up the robot and makes it ready to receive movement commands.
     """
-    return await make_request("POST", "/api/power/on")
+    return await make_request("POST", "/api/motors/set_mode/enabled")
 
 
 @mcp.tool()
@@ -337,7 +345,7 @@ async def turn_off_robot() -> Dict[str, Any]:
     
     This powers down the robot safely. Use this when done controlling the robot.
     """
-    return await make_request("POST", "/api/power/off")
+    return await make_request("POST", "/api/motors/set_mode/disabled")
 
 
 @mcp.tool()
@@ -347,7 +355,7 @@ async def get_power_state() -> Dict[str, Any]:
     
     Returns whether the robot is powered on or off.
     """
-    return await make_request("GET", "/api/state/power")
+    return await make_request("GET", "/api/motors/status")
 
 
 @mcp.tool()
@@ -357,7 +365,9 @@ async def stop_all_movements() -> Dict[str, Any]:
     
     This stops the head and antennas in their current positions.
     """
-    return await make_request("POST", "/api/stop")
+    # The daemon doesn't have a direct stop endpoint
+    # We can disable motors to stop movements
+    return await make_request("POST", "/api/motors/set_mode/disabled")
 
 
 @mcp.tool()
@@ -375,45 +385,45 @@ async def express_emotion(emotion: str) -> Dict[str, Any]:
     if emotion == "happy":
         # Lift head slightly and antennas up
         head_pose = create_head_pose(z=5, pitch=-5, degrees=True, mm=True)
-        await make_request("POST", "/api/goto", json_data={
-            "head": head_pose,
-            "antennas": {"left": 30, "right": 30},
+        await make_request("POST", "/api/move/goto", json_data={
+            "head_pose": head_pose,
+            "antennas": [math.radians(30), math.radians(30)],
             "duration": 1.5
         })
         
     elif emotion == "sad":
         # Lower head and antennas down
         head_pose = create_head_pose(z=-5, pitch=10, degrees=True, mm=True)
-        await make_request("POST", "/api/goto", json_data={
-            "head": head_pose,
-            "antennas": {"left": -20, "right": -20},
+        await make_request("POST", "/api/move/goto", json_data={
+            "head_pose": head_pose,
+            "antennas": [math.radians(-20), math.radians(-20)],
             "duration": 2.0
         })
         
     elif emotion == "curious":
         # Tilt head to the side
         head_pose = create_head_pose(roll=20, degrees=True)
-        await make_request("POST", "/api/goto", json_data={
-            "head": head_pose,
-            "antennas": {"left": 15, "right": -15},
+        await make_request("POST", "/api/move/goto", json_data={
+            "head_pose": head_pose,
+            "antennas": [math.radians(15), math.radians(-15)],
             "duration": 1.5
         })
         
     elif emotion == "surprised":
         # Quick upward movement
         head_pose = create_head_pose(z=10, pitch=-15, degrees=True, mm=True)
-        await make_request("POST", "/api/goto", json_data={
-            "head": head_pose,
-            "antennas": {"left": 45, "right": 45},
+        await make_request("POST", "/api/move/goto", json_data={
+            "head_pose": head_pose,
+            "antennas": [math.radians(45), math.radians(45)],
             "duration": 0.8
         })
         
     elif emotion == "confused":
         # Alternate antenna positions
         head_pose = create_head_pose(roll=15, degrees=True)
-        await make_request("POST", "/api/goto", json_data={
-            "head": head_pose,
-            "antennas": {"left": 25, "right": -25},
+        await make_request("POST", "/api/move/goto", json_data={
+            "head_pose": head_pose,
+            "antennas": [math.radians(25), math.radians(-25)],
             "duration": 1.5
         })
         
@@ -448,10 +458,10 @@ async def look_at_direction(direction: str, duration: float = 2.0) -> Dict[str, 
         pose = create_head_pose()
     
     payload = {
-        "head": pose,
+        "head_pose": pose,
         "duration": duration
     }
-    return await make_request("POST", "/api/goto", json_data=payload)
+    return await make_request("POST", "/api/move/goto", json_data=payload)
 
 
 @mcp.tool()
@@ -485,9 +495,9 @@ async def perform_gesture(gesture: str) -> Dict[str, Any]:
     elif gesture == "thinking":
         # Tilt head and one antenna
         head_pose = create_head_pose(roll=15, pitch=5, degrees=True)
-        await make_request("POST", "/api/goto", json_data={
-            "head": head_pose,
-            "antennas": {"left": 20, "right": -10},
+        await make_request("POST", "/api/move/goto", json_data={
+            "head_pose": head_pose,
+            "antennas": [math.radians(20), math.radians(-10)],
             "duration": 1.5
         })
         
@@ -510,7 +520,7 @@ async def get_health_status() -> Dict[str, Any]:
     
     Returns information about system health, temperature, and any warnings.
     """
-    return await make_request("GET", "/api/health")
+    return await make_request("GET", "/api/daemon/status")
 
 
 # Resources

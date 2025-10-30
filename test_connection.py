@@ -42,13 +42,13 @@ async def test_connection():
             else:
                 print(f"   ⚠ State endpoint returned status {response.status_code}")
             
-            # Test power state
-            print("\n4. Testing power state (/api/state/power)...")
-            response = await client.get(f"{base_url}/api/state/power")
+            # Test motor status
+            print("\n4. Testing motor status (/api/motors/status)...")
+            response = await client.get(f"{base_url}/api/motors/status")
             if response.status_code == 200:
-                print("   ✓ Power state accessible")
-                power = response.json()
-                print(f"   ⚡ Power state: {power}")
+                print("   ✓ Motor status accessible")
+                motors = response.json()
+                print(f"   ⚡ Motor status: {motors}")
             
             print("\n✅ All tests passed! Daemon is running correctly.")
             print("\nYou can now:")
