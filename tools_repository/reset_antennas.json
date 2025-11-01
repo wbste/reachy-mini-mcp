@@ -1,0 +1,13 @@
+{
+  "name": "reset_antennas",
+  "description": "Reset both antennas to their neutral position (0 degrees).",
+  "parameters": {
+    "required": [],
+    "optional": []
+  },
+  "execution": {
+    "type": "script",
+    "script_file": "reset_antennas.py"
+  }
+}
+
