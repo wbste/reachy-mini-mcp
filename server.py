@@ -294,48 +294,42 @@ Status Tools (4):
 4. turn_on_robot() - Power on the robot
 
 Control Tool (1):
-5. operate_robot() - Execute robot commands based on body parts
+5. operate_robot(intent, metadata) - Execute robot commands based on intent
 
-The operate_robot() tool uses a simplified interface where you specify the bodyPart and its parameters:
+The operate_robot() tool uses an intent-based interface:
+
+Args:
+    intent (str): Your intent or goal (e.g., "greeting", "acknowledge", "express_happiness")
+    metadata (dict, optional): Additional context as JSON (e.g., {"duration": 2.0, "angle": 15})
 
 Examples:
-- Move head: operate_robot(commands=[{"bodyPart": "head", "z": 10, "duration": 2.0}])
-- Express emotion: operate_robot(commands=[{"bodyPart": "emotion", "emotion": "happy"}])
-- Perform gesture: operate_robot(commands=[{"bodyPart": "gesture", "gesture": "greeting"}])
-- Control antennas: operate_robot(commands=[{"bodyPart": "antennas", "left": 30, "right": -30, "duration": 1.5}])
-- Nod head: operate_robot(commands=[{"bodyPart": "nod", "angle": 15, "duration": 1.0}])
-- Look around: operate_robot(commands=[{"bodyPart": "look", "direction": "left", "duration": 1.0}])
+- Simple intent: operate_robot(intent="greeting")
+- Intent with context: operate_robot(intent="acknowledge", metadata={"enthusiasm": "high"})
+- Custom parameters: operate_robot(intent="express_curiosity", metadata={"duration": 2.0, "angle": 20})
 
-Command Sequences (execute multiple actions):
-operate_robot(commands=[
-    {"bodyPart": "gesture", "gesture": "greeting"},
-    {"bodyPart": "nod", "angle": 15, "duration": 2.0},
-    {"bodyPart": "antennas", "left": 30, "right": -30, "duration": 1.5}
-])
+How It Works:
+The MCP server infers the appropriate robot action based on your intent and metadata.
+Currently, as a placeholder, it randomly chooses between nodding or shaking the head.
+
+Intent Examples:
+- "greeting" - Welcome someone
+- "acknowledge" - Show understanding
+- "agree" - Express agreement
+- "disagree" - Express disagreement
+- "curious" - Show curiosity
+- "thinking" - Appear thoughtful
+- "celebrate" - Express joy
+
+Metadata Parameters (optional):
+- duration: How long the action takes (default: 1.5 seconds)
+- angle: Movement angle in degrees (default: 15 degrees)
+- enthusiasm: high/medium/low (contextual hint)
 
 Best Practices:
 - Always check robot state first with get_robot_state()
 - Ensure robot is powered on with turn_on_robot() before movement commands
-- Use command sequences for complex choreographed movements
-
-Available Body Parts:
-- head: Move head (x, y, z, roll, pitch, yaw, duration)
-- antennas: Move antennas (left, right, duration)
-- emotion: Express emotion (emotion: happy/sad/curious/surprised/confused)
-- gesture: Perform gesture (gesture: greeting/yes/no/thinking/celebration)
-- nod: Nod head (angle, duration)
-- shake: Shake head (angle, duration)
-- tilt: Tilt head (direction, angle, duration)
-- look: Look in direction (direction: up/down/left/right/forward, duration)
-- power: Control power (state: on/off)
-- reset_head: Reset head to neutral
-- reset_antennas: Reset antennas to neutral
-- state: Get robot state
-- head_state: Get head state
-- antennas_state: Get antenna state
-- power_state: Get power state
-- health: Get health status
-- stop: Stop all movements
+- Provide clear intents for better inference
+- Use metadata to fine-tune the action
 """
 
 
@@ -348,30 +342,30 @@ Reachy Mini Safety Guidelines:
 1. Always check robot state before issuing movement commands using get_robot_state()
 2. Use appropriate durations (typically 1-3 seconds) for smooth movements
 3. Avoid extreme angles that might stress the motors
-4. Use operate_robot(commands=[{"bodyPart": "stop"}]) in case of unexpected behavior
-5. Turn off the robot with operate_robot(commands=[{"bodyPart": "power", "state": "off"}]) when done
-6. Monitor health_status periodically during extended use with get_health_status()
-7. When using command sequences, ensure movements have appropriate durations to complete before the next command
+4. Turn off the robot when done with get_power_state() and manual control
+5. Monitor health_status periodically during extended use with get_health_status()
 
-Head Position Limits:
+Intent-Based Control:
+- The operate_robot() tool uses intent and metadata to infer actions
+- Currently, it randomly chooses between nodding or shaking the head as a placeholder
+- Future versions will map intents to appropriate robot behaviors intelligently
+
+Metadata Parameters:
+- duration: Recommended 1-3 seconds for smooth movements
+- angle: Keep within safe range (typically 10-30 degrees for head movements)
+
+Head Movement Limits:
 - Position offsets: typically ±20mm on x/y/z
 - Rotation angles: ±45 degrees for safe operation
 
 Antenna Limits:
 - Typical range: -45 to 45 degrees
 
-Command Sequences:
-- Commands in a sequence are executed sequentially
-- Each command waits for the previous one to complete
-- If a command fails, subsequent commands will still be attempted
-- Check the results array to see which commands succeeded or failed
-
-Available Body Parts for operate_robot:
-- Movement: head, nod, shake, tilt, reset_head
-- Antennas: antennas, reset_antennas, antennas_state
-- Expressions: emotion, gesture, look
-- Control: power, stop
-- Status: state, head_state, health, power_state
+Best Practices:
+- Use clear, specific intents (e.g., "greeting" vs "move")
+- Provide metadata for fine control when needed
+- Start with default parameters and adjust as needed
+- Monitor robot response and adjust if movements seem too fast or extreme
 """
 
 
@@ -395,183 +389,93 @@ def get_tool_registry() -> Dict[str, Any]:
 # Meta-tool for operating the robot dynamically
 # Note: This is registered manually in initialize_server() after all tools are loaded
 async def operate_robot(
-    commands: List[Dict[str, Any]]
+    intent: str,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Execute robot control commands based on body parts and parameters.
+    Execute robot control based on intent and metadata.
     
-    Simplified interface that accepts a list of control commands, where each command
-    specifies a bodyPart and its control parameters.
+    Intent-based interface where the MCP infers what action to perform
+    based on the user's intent and optional metadata.
     
     Args:
-        commands: List of command dictionaries. Each dict should contain:
-                  - "bodyPart": The body part to control (head, antennas, emotion, gesture, etc.)
-                  - Additional parameters specific to that body part
-    
-    Body Parts and Parameters:
-        - head: x, y, z, roll, pitch, yaw, duration (move head)
-        - antennas: left, right, duration (move antennas)
-        - emotion: emotion (happy/sad/curious/surprised/confused)
-        - gesture: gesture (greeting/yes/no/thinking/celebration)
-        - nod: angle, duration (nod head)
-        - shake: angle, duration (shake head)
-        - tilt: direction, angle, duration (tilt head)
-        - look: direction (up/down/left/right/forward), duration
-        - power: state (on/off)
+        intent: The user's intent (e.g., "greeting", "acknowledge", "express_happiness", etc.)
+        metadata: Optional JSON metadata with additional context
     
     Returns:
-        Dictionary with results from all commands
+        Dictionary with the action performed and results
         
     Examples:
-        # Move head and antennas
-        operate_robot(commands=[
-            {"bodyPart": "head", "z": 10, "duration": 2.0},
-            {"bodyPart": "antennas", "left": 30, "right": -30, "duration": 1.5}
-        ])
+        # Simple intent
+        operate_robot(intent="greeting")
         
-        # Express emotion and gesture
-        operate_robot(commands=[
-            {"bodyPart": "emotion", "emotion": "happy"},
-            {"bodyPart": "gesture", "gesture": "greeting"}
-        ])
+        # Intent with metadata
+        operate_robot(intent="acknowledge", metadata={"enthusiasm": "high"})
         
-        # Nod and look
-        operate_robot(commands=[
-            {"bodyPart": "nod", "angle": 15, "duration": 1.0},
-            {"bodyPart": "look", "direction": "left", "duration": 1.0}
-        ])
+        # Custom intent
+        operate_robot(intent="express_curiosity", metadata={"duration": 2.0})
+    
+    Note: For now, the MCP randomly chooses between nodding or shaking the head
+          regardless of the intent, as a placeholder implementation.
     """
+    import random
+    
     # Get the current tool registry
     registry = get_tool_registry()
     
-    # Mapping from bodyPart to tool names
-    BODY_PART_TO_TOOL = {
-        "head": "move_head",
-        "antennas": "move_antennas",
-        "emotion": "express_emotion",
-        "gesture": "perform_gesture",
-        "nod": "nod_head",
-        "shake": "shake_head",
-        "tilt": "tilt_head",
-        "look": "look_at_direction",
-        "power": None,  # Special handling
-        "reset_head": "reset_head",
-        "reset_antennas": "reset_antennas",
-        "state": "get_robot_state",
-        "head_state": "get_head_state",
-        "antennas_state": "get_antennas_state",
-        "power_state": "get_power_state",
-        "health": "get_health_status",
-        "stop": "stop_all_movements"
-    }
+    # For now, randomly choose between nod or shake
+    action = random.choice(["nod", "shake"])
     
-    if not isinstance(commands, list):
+    # Default parameters
+    default_duration = 1.5
+    default_angle = 15
+    
+    # Extract parameters from metadata if provided
+    if metadata is None:
+        metadata = {}
+    
+    duration = metadata.get("duration", default_duration)
+    angle = metadata.get("angle", default_angle)
+    
+    # Map to tool name
+    tool_name = "nod_head" if action == "nod" else "shake_head"
+    
+    # Check if tool exists in registry
+    if tool_name not in registry:
         return {
-            "error": "commands parameter must be a list of command dictionaries",
+            "intent": intent,
+            "metadata": metadata,
+            "error": f"Tool '{tool_name}' not found in registry",
             "status": "failed"
         }
     
-    results = []
-    failed_count = 0
-    
-    for idx, command in enumerate(commands):
-        if not isinstance(command, dict):
-            results.append({
-                "command_index": idx,
-                "error": "Each command must be a dictionary",
-                "status": "failed"
-            })
-            failed_count += 1
-            continue
+    # Execute the command
+    try:
+        tool_func = registry[tool_name]
+        result = await tool_func(duration=duration, angle=angle)
         
-        body_part = command.get("bodyPart")
-        
-        if not body_part:
-            results.append({
-                "command_index": idx,
-                "error": "Missing 'bodyPart' in command",
-                "available_body_parts": list(BODY_PART_TO_TOOL.keys()),
-                "status": "failed"
-            })
-            failed_count += 1
-            continue
-        
-        # Map bodyPart to tool name
-        tool_name = BODY_PART_TO_TOOL.get(body_part)
-        
-        # Special handling for power
-        if body_part == "power":
-            state = command.get("state", "").lower()
-            if state == "on":
-                tool_name = "turn_on_robot"
-            elif state == "off":
-                tool_name = "turn_off_robot"
-            else:
-                results.append({
-                    "command_index": idx,
-                    "bodyPart": body_part,
-                    "error": "Power state must be 'on' or 'off'",
-                    "status": "failed"
-                })
-                failed_count += 1
-                continue
-        
-        if not tool_name:
-            results.append({
-                "command_index": idx,
-                "bodyPart": body_part,
-                "error": f"Unknown bodyPart '{body_part}'",
-                "available_body_parts": list(BODY_PART_TO_TOOL.keys()),
-                "status": "failed"
-            })
-            failed_count += 1
-            continue
-        
-        # Check if tool exists in registry
-        if tool_name not in registry:
-            results.append({
-                "command_index": idx,
-                "bodyPart": body_part,
-                "tool_name": tool_name,
-                "error": f"Tool '{tool_name}' not found in registry",
-                "status": "failed"
-            })
-            failed_count += 1
-            continue
-        
-        # Extract parameters (everything except bodyPart)
-        parameters = {k: v for k, v in command.items() if k != "bodyPart"}
-        
-        # Execute the command
-        try:
-            tool_func = registry[tool_name]
-            result = await tool_func(**parameters)
-            results.append({
-                "command_index": idx,
-                "bodyPart": body_part,
-                "tool": tool_name,
-                "parameters": parameters,
-                "result": result,
-                "status": "success"
-            })
-        except Exception as e:
-            results.append({
-                "command_index": idx,
-                "bodyPart": body_part,
-                "tool": tool_name,
-                "parameters": parameters,
-                "error": str(e),
-                "status": "failed"
-            })
-            failed_count += 1
-    
-    return {
-        "total_commands": len(commands),
-        "successful": len(commands) - failed_count,
-        "failed": failed_count,
-        "results": results,
-        "status": "success" if failed_count == 0 else "partial" if failed_count < len(commands) else "failed"
-    }
+        return {
+            "intent": intent,
+            "metadata": metadata,
+            "inferred_action": action,
+            "tool_used": tool_name,
+            "parameters": {
+                "duration": duration,
+                "angle": angle
+            },
+            "result": result,
+            "status": "success",
+            "note": "MCP randomly chose between nod/shake as placeholder implementation"
+        }
+    except Exception as e:
+        return {
+            "intent": intent,
+            "metadata": metadata,
+            "inferred_action": action,
+            "tool_used": tool_name,
+            "error": str(e),
+            "status": "failed"
+        }
 
 
 # Initialize and run
