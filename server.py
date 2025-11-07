@@ -394,29 +394,14 @@ async def operate_robot(
 ) -> Dict[str, Any]:
     """
     Execute robot control based on intent and metadata.
+        
+    # Args
+    - intent: The user's intent (e.g., "greeting", "acknowledge", "express_happiness", etc.)
+    - metadata: Optional JSON metadata with additional context
     
-    Intent-based interface where the MCP infers what action to perform
-    based on the user's intent and optional metadata.
-    
-    Args:
-        intent: The user's intent (e.g., "greeting", "acknowledge", "express_happiness", etc.)
-        metadata: Optional JSON metadata with additional context
-    
-    Returns:
+    # Returns
         Dictionary with the action performed and results
         
-    Examples:
-        # Simple intent
-        operate_robot(intent="greeting")
-        
-        # Intent with metadata
-        operate_robot(intent="acknowledge", metadata={"enthusiasm": "high"})
-        
-        # Custom intent
-        operate_robot(intent="express_curiosity", metadata={"duration": 2.0})
-    
-    Note: For now, the MCP randomly chooses between nodding or shaking the head
-          regardless of the intent, as a placeholder implementation.
     """
     import random
     
