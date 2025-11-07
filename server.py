@@ -285,24 +285,57 @@ You are controlling a Reachy Mini robot. The robot has:
 - A camera for vision
 - Various gestures and emotion expressions
 
-All robot operations are accessed through the operate_robot() tool, which supports both single commands and sequences:
+AVAILABLE MCP TOOLS (5 total):
 
-Single Commands:
-1. Express emotions: operate_robot(tool_name="express_emotion", parameters={"emotion": "happy"})
-2. Perform gestures: operate_robot(tool_name="perform_gesture", parameters={"gesture": "greeting"})
-3. Move head: operate_robot(tool_name="move_head", parameters={"z": 10, "duration": 2.0})
-4. Control antennas: operate_robot(tool_name="move_antennas", parameters={"left": 30, "right": -30})
-5. Look in directions: operate_robot(tool_name="look_at_direction", parameters={"direction": "left"})
+Status Tools (4):
+1. get_robot_state() - Get full robot state
+2. get_health_status() - Check robot health
+3. get_power_state() - Check if robot is on/off
+4. turn_on_robot() - Power on the robot
+
+Control Tool (1):
+5. operate_robot() - Execute robot commands based on body parts
+
+The operate_robot() tool uses a simplified interface where you specify the bodyPart and its parameters:
+
+Examples:
+- Move head: operate_robot(commands=[{"bodyPart": "head", "z": 10, "duration": 2.0}])
+- Express emotion: operate_robot(commands=[{"bodyPart": "emotion", "emotion": "happy"}])
+- Perform gesture: operate_robot(commands=[{"bodyPart": "gesture", "gesture": "greeting"}])
+- Control antennas: operate_robot(commands=[{"bodyPart": "antennas", "left": 30, "right": -30, "duration": 1.5}])
+- Nod head: operate_robot(commands=[{"bodyPart": "nod", "angle": 15, "duration": 1.0}])
+- Look around: operate_robot(commands=[{"bodyPart": "look", "direction": "left", "duration": 1.0}])
 
 Command Sequences (execute multiple actions):
 operate_robot(commands=[
-    {"tool_name": "perform_gesture", "parameters": {"gesture": "greeting"}},
-    {"tool_name": "nod_head", "parameters": {"duration": 2.0, "angle": 15}},
-    {"tool_name": "move_antennas", "parameters": {"left": 30, "right": -30, "duration": 1.5}}
+    {"bodyPart": "gesture", "gesture": "greeting"},
+    {"bodyPart": "nod", "angle": 15, "duration": 2.0},
+    {"bodyPart": "antennas", "left": 30, "right": -30, "duration": 1.5}
 ])
 
-Always check the robot state first with operate_robot(tool_name="get_robot_state") before issuing commands.
-Remember to turn on the robot with operate_robot(tool_name="turn_on_robot") before movement commands.
+Best Practices:
+- Always check robot state first with get_robot_state()
+- Ensure robot is powered on with turn_on_robot() before movement commands
+- Use command sequences for complex choreographed movements
+
+Available Body Parts:
+- head: Move head (x, y, z, roll, pitch, yaw, duration)
+- antennas: Move antennas (left, right, duration)
+- emotion: Express emotion (emotion: happy/sad/curious/surprised/confused)
+- gesture: Perform gesture (gesture: greeting/yes/no/thinking/celebration)
+- nod: Nod head (angle, duration)
+- shake: Shake head (angle, duration)
+- tilt: Tilt head (direction, angle, duration)
+- look: Look in direction (direction: up/down/left/right/forward, duration)
+- power: Control power (state: on/off)
+- reset_head: Reset head to neutral
+- reset_antennas: Reset antennas to neutral
+- state: Get robot state
+- head_state: Get head state
+- antennas_state: Get antenna state
+- power_state: Get power state
+- health: Get health status
+- stop: Stop all movements
 """
 
 
@@ -312,12 +345,12 @@ def safety_prompt() -> str:
     return """
 Reachy Mini Safety Guidelines:
 
-1. Always check robot state before issuing movement commands using operate_robot(tool_name="get_robot_state")
+1. Always check robot state before issuing movement commands using get_robot_state()
 2. Use appropriate durations (typically 1-3 seconds) for smooth movements
 3. Avoid extreme angles that might stress the motors
-4. Use operate_robot(tool_name="stop_all_movements") in case of unexpected behavior
-5. Turn off the robot with operate_robot(tool_name="turn_off_robot") when done
-6. Monitor health_status periodically during extended use
+4. Use operate_robot(commands=[{"bodyPart": "stop"}]) in case of unexpected behavior
+5. Turn off the robot with operate_robot(commands=[{"bodyPart": "power", "state": "off"}]) when done
+6. Monitor health_status periodically during extended use with get_health_status()
 7. When using command sequences, ensure movements have appropriate durations to complete before the next command
 
 Head Position Limits:
@@ -332,6 +365,13 @@ Command Sequences:
 - Each command waits for the previous one to complete
 - If a command fails, subsequent commands will still be attempted
 - Check the results array to see which commands succeeded or failed
+
+Available Body Parts for operate_robot:
+- Movement: head, nod, shake, tilt, reset_head
+- Antennas: antennas, reset_antennas, antennas_state
+- Expressions: emotion, gesture, look
+- Control: power, stop
+- Status: state, head_state, health, power_state
 """
 
 
@@ -355,183 +395,183 @@ def get_tool_registry() -> Dict[str, Any]:
 # Meta-tool for operating the robot dynamically
 # Note: This is registered manually in initialize_server() after all tools are loaded
 async def operate_robot(
-    tool_name: Optional[str] = None, 
-    parameters: Optional[Dict[str, Any]] = None,
-    commands: Optional[List[Dict[str, Any]]] = None
+    commands: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
     """
-    Execute robot control tool(s) dynamically based on tools_index.json.
+    Execute robot control commands based on body parts and parameters.
     
-    This is a meta-tool that allows you to call any of the available robot control tools
-    either as a single command or as a sequence of commands.
-    
-    Available tools (from tools_index.json):
-    - get_robot_state: Get full robot state including all components
-    - get_head_state: Get current head position and orientation
-    - move_head: Move head to specific pose (params: x, y, z, roll, pitch, yaw, duration)
-    - reset_head: Return head to neutral position
-    - nod_head: Make robot nod (params: duration, angle)
-    - shake_head: Make robot shake head (params: duration, angle)
-    - tilt_head: Tilt head left or right (params: direction, angle, duration)
-    - get_antennas_state: Get current antenna positions
-    - move_antennas: Move antennas to specific positions (params: left, right, duration)
-    - reset_antennas: Return antennas to neutral position
-    - turn_on_robot: Power on the robot
-    - turn_off_robot: Power off the robot
-    - get_power_state: Check if robot is powered on/off
-    - stop_all_movements: Emergency stop all movements
-    - express_emotion: Express emotion (params: emotion - happy/sad/curious/surprised/confused)
-    - look_at_direction: Look in a direction (params: direction - up/down/left/right/forward, duration)
-    - perform_gesture: Perform gesture (params: gesture - greeting/yes/no/thinking/celebration)
-    - get_health_status: Get overall health status
+    Simplified interface that accepts a list of control commands, where each command
+    specifies a bodyPart and its control parameters.
     
     Args:
-        tool_name: Name of the tool to execute (for single command mode)
-        parameters: Dictionary of parameters to pass to the tool (for single command mode)
-        commands: List of command dictionaries for sequence mode. Each dict should have:
-                  - "tool_name": Name of the tool to execute
-                  - "parameters": Dictionary of parameters (optional)
+        commands: List of command dictionaries. Each dict should contain:
+                  - "bodyPart": The body part to control (head, antennas, emotion, gesture, etc.)
+                  - Additional parameters specific to that body part
+    
+    Body Parts and Parameters:
+        - head: x, y, z, roll, pitch, yaw, duration (move head)
+        - antennas: left, right, duration (move antennas)
+        - emotion: emotion (happy/sad/curious/surprised/confused)
+        - gesture: gesture (greeting/yes/no/thinking/celebration)
+        - nod: angle, duration (nod head)
+        - shake: angle, duration (shake head)
+        - tilt: direction, angle, duration (tilt head)
+        - look: direction (up/down/left/right/forward), duration
+        - power: state (on/off)
     
     Returns:
-        For single command: Result from the executed tool
-        For sequence: Dictionary with results from all commands
+        Dictionary with results from all commands
         
     Examples:
-        # Single command - Express happiness
-        operate_robot(tool_name="express_emotion", parameters={"emotion": "happy"})
-        
-        # Single command - Move head up
-        operate_robot(tool_name="move_head", parameters={"z": 10, "duration": 2.0})
-        
-        # Single command - Get robot state
-        operate_robot(tool_name="get_robot_state")
-        
-        # Sequence of commands
+        # Move head and antennas
         operate_robot(commands=[
-            {"tool_name": "perform_gesture", "parameters": {"gesture": "greeting"}},
-            {"tool_name": "nod_head", "parameters": {"duration": 2.0, "angle": 15}},
-            {"tool_name": "move_antennas", "parameters": {"left": 30, "right": -30, "duration": 1.5}},
-            {"tool_name": "look_at_direction", "parameters": {"direction": "left", "duration": 1.0}}
+            {"bodyPart": "head", "z": 10, "duration": 2.0},
+            {"bodyPart": "antennas", "left": 30, "right": -30, "duration": 1.5}
+        ])
+        
+        # Express emotion and gesture
+        operate_robot(commands=[
+            {"bodyPart": "emotion", "emotion": "happy"},
+            {"bodyPart": "gesture", "gesture": "greeting"}
+        ])
+        
+        # Nod and look
+        operate_robot(commands=[
+            {"bodyPart": "nod", "angle": 15, "duration": 1.0},
+            {"bodyPart": "look", "direction": "left", "duration": 1.0}
         ])
     """
     # Get the current tool registry
     registry = get_tool_registry()
     
-    # Determine mode: sequence or single command
-    if commands is not None:
-        # Sequence mode
-        if not isinstance(commands, list):
-            return {
-                "error": "commands parameter must be a list of command dictionaries",
-                "status": "failed"
-            }
-        
-        results = []
-        failed_count = 0
-        
-        for idx, command in enumerate(commands):
-            if not isinstance(command, dict):
-                results.append({
-                    "command_index": idx,
-                    "error": "Each command must be a dictionary",
-                    "status": "failed"
-                })
-                failed_count += 1
-                continue
-            
-            cmd_tool_name = command.get("tool_name")
-            cmd_parameters = command.get("parameters", {})
-            
-            if not cmd_tool_name:
-                results.append({
-                    "command_index": idx,
-                    "error": "Missing 'tool_name' in command",
-                    "status": "failed"
-                })
-                failed_count += 1
-                continue
-            
-            # Check if tool exists
-            if cmd_tool_name not in registry:
-                available_tools = ", ".join(sorted(registry.keys()))
-                results.append({
-                    "command_index": idx,
-                    "tool_name": cmd_tool_name,
-                    "error": f"Tool '{cmd_tool_name}' not found",
-                    "available_tools": available_tools,
-                    "status": "failed"
-                })
-                failed_count += 1
-                continue
-            
-            # Execute the command
-            try:
-                tool_func = registry[cmd_tool_name]
-                result = await tool_func(**cmd_parameters)
-                results.append({
-                    "command_index": idx,
-                    "tool": cmd_tool_name,
-                    "parameters": cmd_parameters,
-                    "result": result,
-                    "status": "success"
-                })
-            except Exception as e:
-                results.append({
-                    "command_index": idx,
-                    "tool": cmd_tool_name,
-                    "parameters": cmd_parameters,
-                    "error": str(e),
-                    "status": "failed"
-                })
-                failed_count += 1
-        
+    # Mapping from bodyPart to tool names
+    BODY_PART_TO_TOOL = {
+        "head": "move_head",
+        "antennas": "move_antennas",
+        "emotion": "express_emotion",
+        "gesture": "perform_gesture",
+        "nod": "nod_head",
+        "shake": "shake_head",
+        "tilt": "tilt_head",
+        "look": "look_at_direction",
+        "power": None,  # Special handling
+        "reset_head": "reset_head",
+        "reset_antennas": "reset_antennas",
+        "state": "get_robot_state",
+        "head_state": "get_head_state",
+        "antennas_state": "get_antennas_state",
+        "power_state": "get_power_state",
+        "health": "get_health_status",
+        "stop": "stop_all_movements"
+    }
+    
+    if not isinstance(commands, list):
         return {
-            "mode": "sequence",
-            "total_commands": len(commands),
-            "successful": len(commands) - failed_count,
-            "failed": failed_count,
-            "results": results,
-            "status": "success" if failed_count == 0 else "partial" if failed_count < len(commands) else "failed"
+            "error": "commands parameter must be a list of command dictionaries",
+            "status": "failed"
         }
     
-    elif tool_name is not None:
-        # Single command mode (backward compatible)
-        if parameters is None:
-            parameters = {}
+    results = []
+    failed_count = 0
+    
+    for idx, command in enumerate(commands):
+        if not isinstance(command, dict):
+            results.append({
+                "command_index": idx,
+                "error": "Each command must be a dictionary",
+                "status": "failed"
+            })
+            failed_count += 1
+            continue
+        
+        body_part = command.get("bodyPart")
+        
+        if not body_part:
+            results.append({
+                "command_index": idx,
+                "error": "Missing 'bodyPart' in command",
+                "available_body_parts": list(BODY_PART_TO_TOOL.keys()),
+                "status": "failed"
+            })
+            failed_count += 1
+            continue
+        
+        # Map bodyPart to tool name
+        tool_name = BODY_PART_TO_TOOL.get(body_part)
+        
+        # Special handling for power
+        if body_part == "power":
+            state = command.get("state", "").lower()
+            if state == "on":
+                tool_name = "turn_on_robot"
+            elif state == "off":
+                tool_name = "turn_off_robot"
+            else:
+                results.append({
+                    "command_index": idx,
+                    "bodyPart": body_part,
+                    "error": "Power state must be 'on' or 'off'",
+                    "status": "failed"
+                })
+                failed_count += 1
+                continue
+        
+        if not tool_name:
+            results.append({
+                "command_index": idx,
+                "bodyPart": body_part,
+                "error": f"Unknown bodyPart '{body_part}'",
+                "available_body_parts": list(BODY_PART_TO_TOOL.keys()),
+                "status": "failed"
+            })
+            failed_count += 1
+            continue
         
         # Check if tool exists in registry
         if tool_name not in registry:
-            available_tools = ", ".join(sorted(registry.keys()))
-            return {
-                "error": f"Tool '{tool_name}' not found",
-                "available_tools": available_tools,
-                "registry_size": len(registry),
+            results.append({
+                "command_index": idx,
+                "bodyPart": body_part,
+                "tool_name": tool_name,
+                "error": f"Tool '{tool_name}' not found in registry",
                 "status": "failed"
-            }
+            })
+            failed_count += 1
+            continue
         
+        # Extract parameters (everything except bodyPart)
+        parameters = {k: v for k, v in command.items() if k != "bodyPart"}
+        
+        # Execute the command
         try:
-            # Execute the tool
             tool_func = registry[tool_name]
             result = await tool_func(**parameters)
-            return {
+            results.append({
+                "command_index": idx,
+                "bodyPart": body_part,
                 "tool": tool_name,
                 "parameters": parameters,
                 "result": result,
                 "status": "success"
-            }
+            })
         except Exception as e:
-            return {
+            results.append({
+                "command_index": idx,
+                "bodyPart": body_part,
                 "tool": tool_name,
                 "parameters": parameters,
                 "error": str(e),
                 "status": "failed"
-            }
+            })
+            failed_count += 1
     
-    else:
-        return {
-            "error": "Must provide either 'tool_name' for single command or 'commands' for sequence",
-            "status": "failed"
-        }
+    return {
+        "total_commands": len(commands),
+        "successful": len(commands) - failed_count,
+        "failed": failed_count,
+        "results": results,
+        "status": "success" if failed_count == 0 else "partial" if failed_count < len(commands) else "failed"
+    }
 
 
 # Initialize and run
@@ -539,21 +579,43 @@ async def operate_robot(
 def initialize_server():
     """Initialize the server by loading all tools from the repository."""
     print("=" * 60)
-    print("Reachy Mini MCP Server - Repository-Based Tool Loading")
+    print("Reachy Mini MCP Server - Minimal Tool Set (5 Tools)")
     print("=" * 60)
     print(f"Tools repository path: {TOOLS_REPOSITORY_PATH}")
     print(f"Reachy daemon URL: {REACHY_BASE_URL}")
     print("-" * 60)
     
-    # Register all tools from repository
+    # Register all tools from repository into the internal registry
+    # These are used by operate_robot but not exposed as individual MCP tools
     register_tools_from_repository()
     
-    # Register ONLY the operate_robot meta-tool as an MCP tool
-    # All other tools are loaded into the registry but not exposed as individual MCP tools
+    # Register ONLY 5 essential MCP tools:
+    # 1. operate_robot - meta-tool for executing any command or command sequence
     mcp.tool()(operate_robot)
     print("✓ Registered MCP tool: operate_robot (meta-tool for all robot operations)")
-    print(f"✓ Individual tools are available via operate_robot but not as separate MCP tools")
     
+    # 2-5. Status check tools exposed directly for convenience
+    # These are the same functions from the registry but exposed as MCP tools
+    registry = get_tool_registry()
+    
+    essential_status_tools = [
+        "get_robot_state",
+        "get_health_status", 
+        "get_power_state",
+        "turn_on_robot"
+    ]
+    
+    for tool_name in essential_status_tools:
+        if tool_name in registry:
+            tool_func = registry[tool_name]
+            mcp.tool()(tool_func)
+            print(f"✓ Registered MCP tool: {tool_name}")
+        else:
+            print(f"✗ Warning: {tool_name} not found in registry")
+    
+    print("-" * 60)
+    print(f"✓ Total MCP tools exposed: 5")
+    print(f"✓ Tool registry contains {len(registry)} tools available for operate_robot")
     print("=" * 60)
     print("Server initialized and ready!")
     print("=" * 60)
