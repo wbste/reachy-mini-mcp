@@ -489,7 +489,7 @@ This verifies all JSON files are valid and script files exist.
 
 ## License
 
-This project is licensed under the Apache 2.0 License, matching the Reachy Mini SDK.
+This project is licensed under the MIT License, which includes the MCP and the chat app.
 
 ## Contributing
 
