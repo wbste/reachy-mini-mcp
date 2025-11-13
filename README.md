@@ -17,6 +17,12 @@ This MCP server provides a comprehensive set of tools to control Reachy Mini's h
 - [ ] Hearing: 
   - [ ] VAD, WebRTCVAD / SileroVAD
   - [ ] STT, faster-whisper
+- [ ] Vision
+- [ ] Memory:
+  - [ ] File
+  - [ ] Vector DB
+  - [ ] Vector Graph DB
+- [ ] Growth, nightly fine tunes support
 - [ ] MQTT support 
 - [ ] Move to [autonomous-intelligence](https://github.com/OriNachum/autonomous-intelligence) repo
 
