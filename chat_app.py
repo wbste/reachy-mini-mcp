@@ -34,6 +34,7 @@ import asyncio
 import httpx
 import json
 import sys
+import os
 from pathlib import Path
 from typing import List, Dict, Any
 from mcp import ClientSession, StdioServerParameters
@@ -44,9 +45,10 @@ from mcp.client.stdio import stdio_client
 CHAT_COMPLETIONS_URL = "http://localhost:8100/v1/chat/completions"
 # The model name can be anything when using vLLM - it just needs to be non-empty
 # vLLM will use whatever model it's serving
-MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"  # Adjust based on your vLLM setup
+#MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct"  # Adjust based on your vLLM setup
 #MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 #MODEL_NAME = "meta-llama/Llama-3.2-11B-Vision-Instruct"  # Adjust based on your vLLM setup
+MODEL_NAME = "RedHatAI/Llama-3.2-3B-Instruct-FP8"
 
 class InteractiveChatApp:
     """Interactive chat application with MCP tool integration."""
@@ -59,19 +61,11 @@ class InteractiveChatApp:
         self.stdio_context = None
         self.mcp_tools = []
         self.messages = []
-        self.system_prompt = (
-            "You are a robot controller. Your SOLE purpose is to call functions.\n"
-            "DO NOT provide conversation, explanation, or any text. DO NOT talk about the actions.\n"
-            "When the user gives a command, you MUST respond ONLY with a tool call for `operate_robot`.\n"
-            "If you cannot, respond with an empty message.\n\n"
-            "=== FUNCTION `operate_robot` ===\n"
-            "Call `operate_robot` with the `tool_name` for the action and its `parameters`.\n\n"
-            "=== AVAILABLE `tool_name`s ===\n"
-            "nod_head, shake_head, tilt_head, move_head, reset_head, "
-            "move_antennas, reset_antennas, express_emotion, perform_gesture, look_at_direction, "
-            "get_robot_state, turn_on_robot, turn_off_robot, stop_all_movements"
-        )
-        
+        # load the prompt from agents/reachy/reachy.system.md
+        self.system_prompt = Path("agents/reachy/reachy.system.md").read_text()
+        # Keep track of conversation summary for context
+        self.conversation_summary = []
+
     async def initialize_mcp(self):
         """Initialize MCP client and load tools from mcp.json."""
         print("=" * 70)
@@ -147,6 +141,119 @@ class InteractiveChatApp:
             }
         }
     
+    def _generate_conversation_summary(self) -> str:
+        """
+        Generate a summary of User-Reachy exchanges for context continuity.
+        
+        This creates a concise summary of what the user said and what Reachy responded,
+        helping Reachy understand the conversation flow and continue naturally from
+        its last words.
+        """
+        summary_lines = []
+        current_user_msg = None
+        current_assistant_response = None
+        
+        # Skip system message and process conversation pairs
+        for msg in self.messages[1:]:  # Skip system prompt
+            role = msg.get("role")
+            content = msg.get("content", "")
+            
+            if role == "user":
+                # Save the current exchange if we have one
+                if current_user_msg and current_assistant_response:
+                    summary_lines.append(f"User: {current_user_msg}")
+                    summary_lines.append(f"Reachy: {current_assistant_response}")
+                    summary_lines.append("")
+                
+                # Start new exchange
+                current_user_msg = content
+                current_assistant_response = None
+                
+            elif role == "assistant":
+                # Accumulate assistant responses (might be multiple with tool calls)
+                if content:
+                    if current_assistant_response:
+                        current_assistant_response += " " + content
+                    else:
+                        current_assistant_response = content
+                        
+                # Note tool calls if present
+                if msg.get("tool_calls"):
+                    tool_names = [tc.get("function", {}).get("name", "unknown") 
+                                  for tc in msg["tool_calls"]]
+                    tool_note = f"[Used tools: {', '.join(tool_names)}]"
+                    if current_assistant_response:
+                        current_assistant_response += " " + tool_note
+                    else:
+                        current_assistant_response = tool_note
+        
+        # Add the last exchange if exists
+        if current_user_msg and current_assistant_response:
+            summary_lines.append(f"User: {current_user_msg}")
+            summary_lines.append(f"Reachy: {current_assistant_response}")
+        
+        # Join all summary lines
+        if summary_lines:
+            summary = "\n".join(summary_lines)
+            return f"\n=== Conversation Summary ===\n{summary}\n=== End Summary ===\n"
+        else:
+            return ""
+    
+    def _get_enhanced_system_prompt(self) -> str:
+        """
+        Get system prompt enhanced with conversation summary.
+        
+        This helps Reachy maintain context of what has been said and done,
+        enabling more natural conversation continuity.
+        """
+        base_prompt = self.system_prompt
+        summary = self._generate_conversation_summary()
+        
+        if summary:
+            # Add summary to the end of system prompt
+            return f"{base_prompt}\n\n{summary}\n\nPlease continue the conversation naturally from where you left off."
+        else:
+            return base_prompt
+    
+    def _fix_double_encoded_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Fix double-encoded JSON parameters.
+        
+        Some LLMs (especially Llama models) double-encode complex parameters by 
+        converting arrays/objects to JSON strings. This function recursively parses
+        any string values that look like JSON.
+        
+        Example:
+        {"commands": "[{...}]"}  ->  {"commands": [{...}]}
+        """
+        if not isinstance(params, dict):
+            return params
+            
+        fixed = {}
+        for key, value in params.items():
+            if isinstance(value, str):
+                # Check if the string looks like JSON (starts with [ or {)
+                stripped = value.strip()
+                if (stripped.startswith('[') and stripped.endswith(']')) or \
+                   (stripped.startswith('{') and stripped.endswith('}')):
+                    try:
+                        # Try to parse it as JSON
+                        parsed = json.loads(value)
+                        fixed[key] = parsed
+                        print(f"  [DEBUG] Fixed double-encoded param '{key}': string -> {type(parsed).__name__}")
+                    except json.JSONDecodeError:
+                        # If parsing fails, keep the original string
+                        fixed[key] = value
+                else:
+                    fixed[key] = value
+            elif isinstance(value, dict):
+                # Recursively fix nested dicts
+                fixed[key] = self._fix_double_encoded_params(value)
+            else:
+                fixed[key] = value
+        
+        return fixed
+    
     def _parse_tool_call_from_content(self, content: str) -> Dict[str, Any]:
         """
         Parse tool call from JSON content.
@@ -193,6 +300,9 @@ class InteractiveChatApp:
                 # Extract function name and parameters
                 func_name = parsed.get("name")
                 parameters = parsed.get("parameters", {})
+                
+                # Fix double-encoded JSON strings in parameters (common with Llama models)
+                parameters = self._fix_double_encoded_params(parameters)
                 
                 # Validate it's a known tool
                 known_tools = [tool["mcp_tool"].name for tool in self.mcp_tools]
@@ -262,18 +372,66 @@ class InteractiveChatApp:
             print(f"   ✗ {error_msg}")
             return {"error": error_msg}
     
+    def _prepare_messages_for_api(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Prepare messages for API call by cleaning up problematic sequences.
+        
+        vLLM has issues with:
+        - Empty tool_calls arrays
+        - Orphaned tool messages (tool messages without preceding tool_calls)
+        
+        This function ensures the message sequence is valid for vLLM.
+        """
+        cleaned_messages = []
+        last_assistant_had_tool_calls = False
+        
+        for msg in messages:
+            role = msg.get("role")
+            msg_copy = msg.copy()
+            
+            if role == "assistant":
+                # Track if this assistant message has tool calls
+                has_tool_calls = bool(msg.get("tool_calls"))
+                last_assistant_had_tool_calls = has_tool_calls
+                
+                # Remove empty tool_calls array
+                if "tool_calls" in msg_copy and not msg_copy["tool_calls"]:
+                    del msg_copy["tool_calls"]
+                
+                cleaned_messages.append(msg_copy)
+                
+            elif role == "tool":
+                # Only include tool messages if the last assistant had tool_calls
+                if last_assistant_had_tool_calls:
+                    cleaned_messages.append(msg_copy)
+                else:
+                    # Skip orphaned tool message
+                    print(f"   [DEBUG] Skipping orphaned tool message: {msg.get('name')}")
+                    
+            else:
+                # system, user, etc - include as-is
+                cleaned_messages.append(msg_copy)
+                # Reset tool call tracking on new user message
+                if role == "user":
+                    last_assistant_had_tool_calls = False
+        
+        return cleaned_messages
+    
     async def chat_completion(
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]] = None,
-        max_tokens: int = 500
+        max_tokens: int = 3000
     ) -> Dict[str, Any]:
         """Make a chat completion request with pythonic tool calling support."""
+        # Clean up messages before sending to API
+        cleaned_messages = self._prepare_messages_for_api(messages)
+        
         payload = {
             "model": MODEL_NAME,
-            "messages": messages,
+            "messages": cleaned_messages,
             "max_tokens": max_tokens,
-            "temperature": 0.1  # Lower temperature for more consistent tool calling
+            "temperature": 0.3  # Lower temperature for more consistent tool calling
         }
         
         if tools:
@@ -291,7 +449,7 @@ class InteractiveChatApp:
             except httpx.HTTPStatusError as e:
                 print(f"\n❌ Error calling model: {e}")
                 print(f"\n📋 Request payload (last 3 messages):")
-                for msg in messages[-3:]:
+                for msg in cleaned_messages[-3:]:
                     print(f"   Role: {msg.get('role')}")
                     if msg.get('content'):
                         print(f"   Content: {msg['content'][:100]}...")
@@ -310,27 +468,32 @@ class InteractiveChatApp:
         # Add user message to conversation
         self.messages.append({"role": "user", "content": user_message})
        
-        MAX_HISTORY_MESSAGES = 15  # Keep system + last 20 messages
-        if len(self.messages) > MAX_HISTORY_MESSAGES + 1:
-            print(f"\n[DEBUG] Pruning history: {len(self.messages)} messages")
-            # Keep the system prompt + the last MAX_HISTORY_MESSAGES
-            pruned_messages = [self.messages[0]] + self.messages[-MAX_HISTORY_MESSAGES:]
-            self.messages = pruned_messages
-            print(f"  [DEBUG] Pruned to {len(self.messages)} messages")
+        # Keep ALL history - no pruning
+        # The conversation summary in the system prompt helps maintain context
+        # while the full history ensures complete accuracy
+        print(f"\n[DEBUG] Current history: {len(self.messages)} messages")
+
+        # Update system prompt with conversation summary for better context
+        enhanced_system_prompt = self._get_enhanced_system_prompt()
+        
+        # Create messages list with enhanced system prompt
+        messages_with_summary = [
+            {"role": "system", "content": enhanced_system_prompt}
+        ] + self.messages[1:]  # Skip original system message, use enhanced one
 
         # Get OpenAI-formatted tools
         openai_tools = [tool_dict["openai_tool"] for tool_dict in self.mcp_tools]
         
-        max_iterations = 5  # Prevent infinite loops
+        max_iterations = 10  # Prevent infinite loops
         iteration = 0
         final_response = None
         
         while iteration < max_iterations:
             iteration += 1
             
-            # Make chat completion request
+            # Make chat completion request with enhanced context
             response = await self.chat_completion(
-                messages=self.messages,
+                messages=messages_with_summary,
                 tools=openai_tools
             )
             
@@ -363,8 +526,14 @@ class InteractiveChatApp:
             else:
                 print(f"  tool_calls is empty or None")
             
-            # Add assistant message to conversation
+            # Clean up empty tool_calls array before adding to conversation
+            # vLLM expects clean message format - empty arrays cause issues
+            if "tool_calls" in assistant_message and not assistant_message["tool_calls"]:
+                del assistant_message["tool_calls"]
+            
+            # Add assistant message to conversation (both history and working list)
             self.messages.append(assistant_message)
+            messages_with_summary.append(assistant_message)
             
             # Check if we have a text response
             content_str = assistant_message.get("content", "")
@@ -412,10 +581,23 @@ class InteractiveChatApp:
                 final_response = None
                 # Don't break here - continue to tool call processing below
             elif final_response:
-                # Only text content, no tool calls - this is a normal text response
+                # Only text content, no tool calls - check if this is after tool execution
                 if finish_reason == "stop":
-                    # Normal text response, we're done
-                    break
+                    # Check if the previous messages contain tool results
+                    # If so, this is the final response after tool chain completion
+                    has_recent_tool_results = False
+                    for msg in reversed(self.messages[-5:]):  # Check last 5 messages
+                        if msg.get("role") == "tool":
+                            has_recent_tool_results = True
+                            break
+                    
+                    if has_recent_tool_results:
+                        # This is the final response after tool execution - we're done with this chain
+                        print(f"\n✓ Model provided final response after tool execution")
+                        break
+                    else:
+                        # Just a normal text response, we're done
+                        break
             elif finish_reason == "stop":
                 # No content and no tool calls, we're done
                 break
@@ -458,36 +640,21 @@ class InteractiveChatApp:
                     # Format tool result
                     tool_result_content = json.dumps(tool_result.model_dump() if hasattr(tool_result, 'model_dump') else tool_result)
                     
-                    # Add tool result to conversation
-                    self.messages.append({
+                    # Create tool result message
+                    tool_result_msg = {
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "name": tool_name,
                         "content": tool_result_content
-                    })
+                    }
+                    
+                    # Add tool result to conversation (both history and working list)
+                    self.messages.append(tool_result_msg)
+                    messages_with_summary.append(tool_result_msg)
                 
                 # Continue conversation with tool results
-                # Handle tool calls (both with finish_reason "tool_calls" or "stop")
-            if "tool_calls" in assistant_message and assistant_message["tool_calls"]:
-                tool_calls = assistant_message["tool_calls"]
-                
-                print(f"\n🔧 Processing {len(tool_calls)} tool call(s) (pythonic format)...")
-                
-                # Execute each tool call
-                for tool_call in tool_calls:
-                    # ... (tool execution logic) ...
-                    
-                    # Add tool result to conversation
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "name": tool_name,
-                        "content": tool_result_content
-                    })
-                
-                # We have executed the tool. Stop iterating.
-                # The robot's job is one command -> one action.
-                break  # <-- CHANGE THIS LINE FROM 'continue'
+                # Allow the model to respond to the tool results and potentially chain more commands
+                continue  
             
             # If we get here with a different finish reason, something unexpected happened
             break
@@ -502,6 +669,7 @@ class InteractiveChatApp:
         print("  /help     - Show this help message")
         print("  /clear    - Clear conversation history (keeps system prompt)")
         print("  /history  - Show conversation history")
+        print("  /summary  - Show conversation summary (User-Reachy exchanges)")
         print("  /quit     - Exit the chat application")
         print("  /exit     - Exit the chat application")
         print("\nAvailable robot tools:")
@@ -539,12 +707,26 @@ class InteractiveChatApp:
         print(f"Total messages: {len(self.messages)}")
         print("=" * 70 + "\n")
     
+    def print_summary(self):
+        """Print conversation summary (User-Reachy exchanges)."""
+        summary = self._generate_conversation_summary()
+        
+        if summary:
+            print("\n" + "=" * 70)
+            print("Conversation Summary (User-Reachy Exchanges)")
+            print("=" * 70)
+            print(summary)
+            print("=" * 70 + "\n")
+        else:
+            print("\n✓ No conversation exchanges yet.\n")
+    
     def clear_history(self):
         """Clear conversation history but keep system prompt."""
         self.messages = [
             {"role": "system", "content": self.system_prompt}
         ]
-        print("\n✓ Conversation history cleared (system prompt retained)\n")
+        self.conversation_summary = []
+        print("\n✓ Conversation history and summary cleared (system prompt retained)\n")
     
     async def run(self):
         """Run the interactive chat loop."""
@@ -577,6 +759,9 @@ class InteractiveChatApp:
                     elif command == "/history":
                         self.print_history()
                         continue
+                    elif command == "/summary":
+                        self.print_summary()
+                        continue
                     elif command == "/clear":
                         self.clear_history()
                         continue
@@ -586,14 +771,8 @@ class InteractiveChatApp:
                         continue
                 
                 # Process the message
-                print("\n🤖 Assistant: ", end="", flush=True)
                 response = await self.process_message(user_input)
-                
-                # Print response with simulated streaming effect
-                for char in response:
-                    print(char, end="", flush=True)
-                    await asyncio.sleep(0.01)  # Small delay for effect
-                print("\n")
+                print(f"\n🤖 Assistant: {response}\n")
                 
             except KeyboardInterrupt:
                 print("\n\n⚠️  Interrupted. Type '/quit' to exit or continue chatting.\n")
@@ -608,6 +787,7 @@ class InteractiveChatApp:
     async def cleanup(self):
         """Cleanup MCP session."""
         print("\n🧹 Cleaning up...")
+        
         if self.client_context:
             await self.client_context.__aexit__(None, None, None)
         if self.stdio_context:
